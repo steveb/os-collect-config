@@ -30,6 +30,7 @@ from os_collect_config import collect
 from os_collect_config import exc
 from os_collect_config.tests import test_cfn
 from os_collect_config.tests import test_ec2
+from os_collect_config.tests import test_heat
 from os_collect_config.tests import test_heat_local
 
 
@@ -52,9 +53,16 @@ class TestCollect(testtools.TestCase):
         # make sure we don't run forever!
         if '--one-time' not in fake_args:
             fake_args.append('--one-time')
-        requests_impl_map = {'ec2': test_ec2.FakeRequests,
-                             'cfn': test_cfn.FakeRequests(self)}
-        collect.__main__(args=fake_args, requests_impl_map=requests_impl_map)
+        collector_kwargs_map = {
+            'ec2': {'requests_impl': test_ec2.FakeRequests},
+            'cfn': {'requests_impl': test_cfn.FakeRequests(self)},
+            'heat': {
+                'keystoneclient': test_heat.FakeKeystoneClient(self),
+                'heatclient': test_heat.FakeHeatClient(self)
+            }
+        }
+        collect.__main__(args=fake_args,
+                         collector_kwargs_map=collector_kwargs_map)
 
     def _fake_popen_call_main(self, occ_args):
         calls = []
@@ -93,6 +101,18 @@ class TestCollect(testtools.TestCase):
             'FEDCBA9876543210',
             '--heat_local-path',
             fake_metadata,
+            '--heat-user-id',
+            'FEDCBA9876543210',
+            '--heat-password',
+            '0123456789ABCDEF',
+            '--heat-project-id',
+            '9f6b09df-4d7f-4a33-8ec3-9924d8f46f10',
+            '--heat-auth-url',
+            'http://127.0.0.1:5000/v3',
+            '--heat-stack-id',
+            'a/c482680f-7238-403d-8f76-36acf0c8e0aa',
+            '--heat-resource-name',
+            'server'
         ]
         calls = self._fake_popen_call_main(occ_args)
         proc_args = calls[0]
@@ -296,18 +316,30 @@ class TestCollectAll(testtools.TestCase):
         cfg.CONF.cfn.access_key_id = '0123456789ABCDEF'
         cfg.CONF.cfn.secret_access_key = 'FEDCBA9876543210'
         cfg.CONF.heat_local.path = [_setup_local_metadata(self)]
+        cfg.CONF.heat.auth_url = 'http://127.0.0.1:5000/v3'
+        cfg.CONF.heat.user_id = '0123456789ABCDEF'
+        cfg.CONF.heat.password = 'FEDCBA9876543210'
+        cfg.CONF.heat.project_id = '9f6b09df-4d7f-4a33-8ec3-9924d8f46f10'
+        cfg.CONF.heat.stack_id = 'a/c482680f-7238-403d-8f76-36acf0c8e0aa'
+        cfg.CONF.heat.resource_name = 'server'
 
     def _call_collect_all(
-            self, store, requests_impl_map=None, collectors=None):
-        if requests_impl_map is None:
-            requests_impl_map = {'ec2': test_ec2.FakeRequests,
-                                 'cfn': test_cfn.FakeRequests(self)}
+            self, store, collector_kwargs_map=None, collectors=None):
+        if collector_kwargs_map is None:
+            collector_kwargs_map = {
+                'ec2': {'requests_impl': test_ec2.FakeRequests},
+                'cfn': {'requests_impl': test_cfn.FakeRequests(self)},
+                'heat': {
+                    'keystoneclient': test_heat.FakeKeystoneClient(self),
+                    'heatclient': test_heat.FakeHeatClient(self)
+                }
+            }
         if collectors is None:
             collectors = cfg.CONF.collectors
         return collect.collect_all(
             collectors,
             store=store,
-            requests_impl_map=requests_impl_map)
+            collector_kwargs_map=collector_kwargs_map)
 
     def test_collect_all_store(self):
         (any_changed, paths) = self._call_collect_all(store=True)
@@ -340,10 +372,12 @@ class TestCollectAll(testtools.TestCase):
             self.assertThat(content[collector], matchers.IsInstance(dict))
 
     def test_collect_all_ec2_unavailable(self):
-        requests_impl_map = {'ec2': test_ec2.FakeFailRequests,
-                             'cfn': test_cfn.FakeRequests(self)}
+        collector_kwargs_map = {
+            'ec2': {'requests_impl': test_ec2.FakeFailRequests},
+            'cfn': {'requests_impl': test_cfn.FakeRequests(self)}
+        }
         (any_changed, content) = self._call_collect_all(
-            store=False, requests_impl_map=requests_impl_map)
+            store=False, collector_kwargs_map=collector_kwargs_map)
         self.assertFalse(any_changed)
         self.assertThat(content, matchers.IsInstance(dict))
         self.assertNotIn('ec2', content)
